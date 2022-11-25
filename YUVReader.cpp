@@ -1,5 +1,6 @@
 #include "YUVReader.h"
 #include <fstream>
+#include <thread>
 
 YUVFormat YUVReader::ReadFromFile(const std::string& input_file_name, SizeFormat format) {
 	std::ifstream input_file_stream(input_file_name, std::ios_base::binary);
@@ -60,35 +61,37 @@ YUVFormat YUVReader::ConvertBmpToYuv(BMPFormat& bmp_format, SizeFormat format)
 {
 	YUVFormat file_information(format);
 
-	int y_value;
-	int u_value;
-	int v_value;
+	const size_t kYUVCoefficient = 4;
 	Page page;
 	page.Y.reserve(file_information.height * file_information.width);
-	page.U.reserve(file_information.height * file_information.width / 4);
-	page.V.reserve(file_information.height * file_information.width / 4);
+	page.U.reserve(file_information.height * file_information.width / kYUVCoefficient);
+	page.V.reserve(file_information.height * file_information.width / kYUVCoefficient);
 
-	for (int i = 0; i < file_information.height; i++) {
-		for (int j = 0; j < file_information.width; j++) {
-			if (i < bmp_format.info.bV5Height && j < bmp_format.info.bV5Width) {
-				y_value = 0.257 * bmp_format.rgbInfo[i][j].rgbRed + 0.504 * bmp_format.rgbInfo[i][j].rgbGreen + 0.098 * bmp_format.rgbInfo[i][j].rgbBlue + 16;
-				u_value = -0.148 * bmp_format.rgbInfo[i][j].rgbRed - 0.291 * bmp_format.rgbInfo[i][j].rgbGreen + 0.439 * bmp_format.rgbInfo[i][j].rgbBlue + 128;
-				v_value = 0.439 * bmp_format.rgbInfo[i][j].rgbRed - 0.368 * bmp_format.rgbInfo[i][j].rgbGreen - 0.071 * bmp_format.rgbInfo[i][j].rgbBlue + 128;
-			}
-			else {
-				y_value = 0;
-				u_value = 0;
-				v_value = 0;
-			}
-			page.Y.push_back(y_value);
-
-			if (j % 2 == 0 && i % 2 == 0)
-			{
-				page.U.push_back(u_value);
-				page.V.push_back(v_value);
-			}
-		}
+	const int kThreadSize = std::thread::hardware_concurrency();
+	std::vector<std::thread> converter_threads;
+	std::vector<Page> part_pages;
+	part_pages.reserve(kThreadSize);
+	converter_threads.reserve(kThreadSize);
+	for (int i = 0; i < kThreadSize; i++) {
+		Page part_page;
+		part_page.Y.reserve(file_information.height * file_information.width / kThreadSize);
+		part_page.U.reserve(file_information.height * file_information.width / (4 * kThreadSize));
+		part_page.V.reserve(file_information.height * file_information.width / (4 * kThreadSize));
+		part_pages.push_back(part_page);
+		int start = i * file_information.height / kThreadSize;
+		int finish = (i + 1) * file_information.height / kThreadSize;
+		std::thread converter_thread(&YUVReader::FillPage, this, start, finish, std::ref(part_pages[i]), std::ref(file_information), std::ref(bmp_format));
+		converter_threads.push_back(move(converter_thread));
 	}
+
+	for (int i = 0; i < kThreadSize; i++) {
+		converter_threads[i].join();
+		int start = i * file_information.height * file_information.width / kThreadSize;
+		page.Y.insert(page.Y.begin() + start, part_pages[i].Y.begin(), part_pages[i].Y.end());
+		page.U.insert(page.U.begin() + start / kYUVCoefficient, part_pages[i].U.begin(), part_pages[i].U.end());
+		page.V.insert(page.V.begin() + start / kYUVCoefficient, part_pages[i].V.begin(), part_pages[i].V.end());
+	}
+
 	file_information.pages.push_back(page);
 
 	return file_information;
@@ -122,4 +125,32 @@ YUVFormat YUVReader::AddPictureToVideo(YUVFormat& video, YUVFormat& picture)
 	}
 
 	return video_picture;
+}
+
+void YUVReader::FillPage(const int start, const int finish, Page& page, YUVFormat& file_information, BMPFormat& bmp_format)
+{
+	int y_value;
+	int u_value;
+	int v_value;
+	for (int i = start; i < finish; i++) {
+		for (int j = 0; j < file_information.width; j++) {
+			if (i < bmp_format.info.bV5Height && j < bmp_format.info.bV5Width) {
+				y_value = 0.257 * bmp_format.rgbInfo[i][j].rgbRed + 0.504 * bmp_format.rgbInfo[i][j].rgbGreen + 0.098 * bmp_format.rgbInfo[i][j].rgbBlue + 16;
+				u_value = -0.148 * bmp_format.rgbInfo[i][j].rgbRed - 0.291 * bmp_format.rgbInfo[i][j].rgbGreen + 0.439 * bmp_format.rgbInfo[i][j].rgbBlue + 128;
+				v_value = 0.439 * bmp_format.rgbInfo[i][j].rgbRed - 0.368 * bmp_format.rgbInfo[i][j].rgbGreen - 0.071 * bmp_format.rgbInfo[i][j].rgbBlue + 128;
+			}
+			else {
+				y_value = 0;
+				u_value = 0;
+				v_value = 0;
+			}
+			page.Y.push_back(y_value);
+
+			if (j % 2 == 0 && i % 2 == 0)
+			{
+				page.U.push_back(u_value);
+				page.V.push_back(v_value);
+			}
+		}
+	}
 }

@@ -46,5 +46,7 @@ public:
 	void WriteToFile(const std::string& file_name, YUVFormat& file_information);
 	YUVFormat ConvertBmpToYuv(BMPFormat& bmp_format, SizeFormat format);
 	YUVFormat AddPictureToVideo(YUVFormat& video, YUVFormat& picture);
+private:
+	void FillPage(const int start, const int finish, Page& page, YUVFormat& file_information, BMPFormat& bmp_format);
 };
 
